@@ -657,3 +657,8 @@ follow-up.
 Done: fixed both review findings. (1) PostEditor::save_translations now keeps the stored source_hash when the re-posted metabox text equals the stored translation (new resolve_source_hash_for_save helper), so a source edit followed by a normal post Update no longer un-stales everything. (2) ElementorIntegration::save_language_data now stamps/keeps the hash for _elementor_data rows with the same rule, so backfilled rows can be flagged and cleared.
 Verified: php -l clean, phpcs 0 errors, PHPUnit 205/205 (5 new: save -> edit source -> re-save same payload stays stale, text change clears it, unhashed legacy row gets stamped, Elementor stale/retranslate cycle). Mutation check: with the re-stamp bug reintroduced, both new stale-cycle tests fail. No live WP install, so metabox flow is proven via the real save_translations code against FakeWpdb.
 Left: nothing for the review findings. reviewed/approved are never set by any UI yet (ticket left transitions open).
+
+## 2026-09-21 - task 3520 (round 3, reviewer fix on PR #43)
+Done: the keep-hash-on-unchanged rule compared byte-for-byte, so a translation written by REST/CLI/AI (LF newlines, raw "&") was re-stamped fresh on the first metabox Update after a source edit (browser textareas post CRLF, kses rewrites "&"). It now ignores line endings and runs the stored text through the same sanitizer (new PostEditor::sanitize_translation_value) before comparing.
+Verified: php -l clean, phpcs 0 errors, PHPUnit 208/208 (3 new in StaleHashResaveNormalizationTest; the CRLF case failed on the round-2 code before the fix). Not checked in wp-admin: no live WordPress on this host.
+Left: nothing for the review findings. reviewed/approved are still set by no UI (ticket left transitions open).

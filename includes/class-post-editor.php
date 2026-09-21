@@ -102,10 +102,33 @@ class PostEditor {
      * @param string      $fresh_hash  md5 of the current live source value
      */
     public static function resolve_source_hash_for_save($existing, $translation, $fresh_hash) {
-        if ($existing && !empty($existing->source_hash) && (string) $existing->translation === (string) $translation) {
+        // Browsers submit textarea newlines as CRLF while API/CLI/AI-written rows
+        // hold bare LF, so line endings alone must not count as a text change.
+        $normalize = static function ($text) {
+            return str_replace(["\r\n", "\r"], "\n", (string) $text);
+        };
+
+        if ($existing && !empty($existing->source_hash) && $normalize($existing->translation) === $normalize($translation)) {
             return $existing->source_hash;
         }
         return $fresh_hash;
+    }
+
+    /**
+     * Sanitize a submitted translation by field type (post form save path).
+     * Shared by the save loop and by the keep-hash comparison, which runs the
+     * STORED text through the same sanitizer so a row written raw by the
+     * REST/CLI path (e.g. a bare "&") is not mistaken for an edit when the
+     * metabox re-posts it and kses normalizes it.
+     */
+    public static function sanitize_translation_value($field_name, $value) {
+        if ($field_name === 'post_content') {
+            return wp_kses_post($value);
+        }
+        if ($field_name === 'post_name') {
+            return sanitize_title($value);
+        }
+        return sanitize_text_field($value);
     }
 
     /**
@@ -419,13 +442,7 @@ class PostEditor {
                     $value = wp_unslash($value);
 
                     // Sanitize based on field type
-                    if ($field_name === 'post_content') {
-                        $value = wp_kses_post($value);
-                    } elseif ($field_name === 'post_name') {
-                        $value = sanitize_title($value);
-                    } else {
-                        $value = sanitize_text_field($value);
-                    }
+                    $value = self::sanitize_translation_value($field_name, $value);
 
                     $existing = $wpdb->get_row($wpdb->prepare(
                         "SELECT id, translation, source_hash FROM {$table} WHERE post_id = %d AND field_name = %s AND language_code = %s",
@@ -448,7 +465,10 @@ class PostEditor {
                         'language_code' => $lang_code,
                         'translation' => $value,
                         'source_hash' => self::resolve_source_hash_for_save(
-                            $existing,
+                            $existing ? (object) [
+                                'translation' => self::sanitize_translation_value($field_name, $existing->translation),
+                                'source_hash' => $existing->source_hash,
+                            ] : null,
                             $value,
                             self::compute_source_hash_from_post($post, $field_name)
                         ),
