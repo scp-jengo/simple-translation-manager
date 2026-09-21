@@ -202,22 +202,30 @@ class ElementorIntegration {
 
         $json = wp_json_encode( $translations );
 
-        $existing = $wpdb->get_var( $wpdb->prepare(
-            "SELECT id FROM {$table} WHERE post_id = %d AND field_name = %s AND language_code = %s",
+        $existing = $wpdb->get_row( $wpdb->prepare(
+            "SELECT id, translation, source_hash FROM {$table} WHERE post_id = %d AND field_name = %s AND language_code = %s",
             $post_id,
             self::FIELD_NAME,
             $lang_code
         ) );
 
+        // Stamp the source hash (task 3520) so a later edit to the Elementor
+        // layout flags this row stale. Kept as-is when the editor panel re-posts
+        // an unchanged map, same rule as the post editor metabox.
         $data = [
             'post_id'       => $post_id,
             'field_name'    => self::FIELD_NAME,
             'language_code' => $lang_code,
             'translation'   => $json,
+            'source_hash'   => PostEditor::resolve_source_hash_for_save(
+                $existing,
+                $json,
+                PostEditor::compute_source_hash( $post_id, self::FIELD_NAME )
+            ),
         ];
 
         if ( $existing ) {
-            $wpdb->update( $table, $data, [ 'id' => $existing ] );
+            $wpdb->update( $table, $data, [ 'id' => $existing->id ] );
         } else {
             $wpdb->insert( $table, $data );
         }

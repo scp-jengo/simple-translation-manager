@@ -14,6 +14,7 @@ use Brain\Monkey;
 use Brain\Monkey\Functions;
 use PHPUnit\Framework\TestCase;
 use STM\ElementorIntegration;
+use STM\PostEditor;
 use STM\Tests\Fakes\FakeWpdb;
 
 class ElementorIntegrationTest extends TestCase {
@@ -44,6 +45,8 @@ class ElementorIntegrationTest extends TestCase {
         Functions\when('__')->returnArg(1);
         Functions\when('rest_ensure_response')->returnArg(1);
         Functions\when('wp_json_encode')->alias(function ($data) { return json_encode($data); });
+        // save_language_data() hashes the live `_elementor_data` source (task 3520).
+        Functions\when('get_post_meta')->justReturn('');
     }
 
     protected function tearDown(): void {
@@ -241,6 +244,43 @@ class ElementorIntegrationTest extends TestCase {
 
         $this->assertCount(1, $rows, 'Saving twice for the same post/language must update, not duplicate.');
         $this->assertSame('Tweede', json_decode($rows[0]['translation'], true)['abc123']['title']);
+    }
+
+    // -----------------------------------------------------------------
+    // Stale detection: _elementor_data rows carry a source hash (task 3520)
+    // -----------------------------------------------------------------
+
+    public function test_save_language_data_stamps_hash_of_the_current_elementor_source() {
+        Functions\when('get_post_meta')->justReturn('[{"id":"abc123"}]');
+
+        ElementorIntegration::save_language_data(42, 'nl', ['abc123' => ['title' => 'Hallo']]);
+
+        $rows = $this->wpdb->all('stm_post_translations');
+        $this->assertSame(md5('[{"id":"abc123"}]'), $rows[0]['source_hash']);
+        $this->assertFalse(PostEditor::is_translation_stale(42, '_elementor_data', $rows[0]['source_hash']));
+    }
+
+    public function test_editing_the_elementor_layout_flags_the_saved_translation_stale_until_it_is_retranslated() {
+        Functions\when('get_post_meta')->justReturn('[{"id":"abc123","v":1}]');
+        ElementorIntegration::save_language_data(42, 'nl', ['abc123' => ['title' => 'Hallo']]);
+
+        // The layout is edited in Elementor after the translation was saved.
+        Functions\when('get_post_meta')->justReturn('[{"id":"abc123","v":2}]');
+        $hash = $this->wpdb->all('stm_post_translations')[0]['source_hash'];
+        $this->assertTrue(PostEditor::is_translation_stale(42, '_elementor_data', $hash));
+
+        // The editor panel re-posts the SAME map: must not clear the flag.
+        ElementorIntegration::save_language_data(42, 'nl', ['abc123' => ['title' => 'Hallo']]);
+        $hash = $this->wpdb->all('stm_post_translations')[0]['source_hash'];
+        $this->assertTrue(
+            PostEditor::is_translation_stale(42, '_elementor_data', $hash),
+            'Re-posting an unchanged translation map must not silently mark it fresh.'
+        );
+
+        // A real re-translation against the new layout does clear it.
+        ElementorIntegration::save_language_data(42, 'nl', ['abc123' => ['title' => 'Hallo opnieuw']]);
+        $hash = $this->wpdb->all('stm_post_translations')[0]['source_hash'];
+        $this->assertFalse(PostEditor::is_translation_stale(42, '_elementor_data', $hash));
     }
 
     public function test_get_language_data_returns_empty_array_when_none_saved() {

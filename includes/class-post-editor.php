@@ -87,6 +87,28 @@ class PostEditor {
     }
 
     /**
+     * The source_hash to store when a form re-posts a translation (task 3520).
+     *
+     * The metabox renders every existing translation as a PREFILLED input inside
+     * the normal post edit form, so each post Update re-posts every untouched
+     * translation. Re-stamping the hash from the (possibly just edited) source on
+     * those re-posts would mark a stale translation fresh again, so the stored
+     * hash is kept whenever the row already exists with an identical translation
+     * text and a recorded hash. It is only (re)stamped when the row is new, the
+     * text was actually changed, or the row was never hashed.
+     *
+     * @param object|null $existing   Existing row (translation, source_hash) or null
+     * @param string      $translation Submitted translation text
+     * @param string      $fresh_hash  md5 of the current live source value
+     */
+    public static function resolve_source_hash_for_save($existing, $translation, $fresh_hash) {
+        if ($existing && !empty($existing->source_hash) && (string) $existing->translation === (string) $translation) {
+            return $existing->source_hash;
+        }
+        return $fresh_hash;
+    }
+
+    /**
      * Is a stored translation stale? True when the source field's content
      * has changed since $source_hash was recorded. A translation that was
      * never hashed (legacy row, source_hash NULL/empty — normally cleared
@@ -405,8 +427,8 @@ class PostEditor {
                         $value = sanitize_text_field($value);
                     }
 
-                    $existing = $wpdb->get_var($wpdb->prepare(
-                        "SELECT id FROM {$table} WHERE post_id = %d AND field_name = %s AND language_code = %s",
+                    $existing = $wpdb->get_row($wpdb->prepare(
+                        "SELECT id, translation, source_hash FROM {$table} WHERE post_id = %d AND field_name = %s AND language_code = %s",
                         $post_id,
                         $field_name,
                         $lang_code
@@ -415,7 +437,7 @@ class PostEditor {
                     // Empty value — delete existing row if present
                     if (empty($value)) {
                         if ($existing) {
-                            $wpdb->delete($table, ['id' => $existing]);
+                            $wpdb->delete($table, ['id' => $existing->id]);
                         }
                         continue;
                     }
@@ -425,11 +447,15 @@ class PostEditor {
                         'field_name' => $field_name,
                         'language_code' => $lang_code,
                         'translation' => $value,
-                        'source_hash' => self::compute_source_hash_from_post($post, $field_name),
+                        'source_hash' => self::resolve_source_hash_for_save(
+                            $existing,
+                            $value,
+                            self::compute_source_hash_from_post($post, $field_name)
+                        ),
                     ];
 
                     if ($existing) {
-                        $wpdb->update($table, $data, ['id' => $existing]);
+                        $wpdb->update($table, $data, ['id' => $existing->id]);
                     } else {
                         $wpdb->insert($table, $data);
                     }
